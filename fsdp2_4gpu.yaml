@@ -1,11 +1,10 @@
 # workspace/configs/fsdp2_4gpu.yaml
-# Accelerate FSDP2 配置 —— 容器内路径，4× A100 80GB
+# Accelerate FSDP2 配置 —— 4× A100 80GB，GPU 0-3
 
 compute_environment: LOCAL_MACHINE
 distributed_type: FSDP
 num_machines: 1
-num_processes: 4          # 对应 CUDA_VISIBLE_DEVICES=0,1,2,3 的 4 张卡
-                           # 容器内可见卡已被 Docker 重排为 0-3，此处无需改动
+num_processes: 4
 machine_rank: 0
 mixed_precision: bf16
 rdzv_backend: static
@@ -18,7 +17,7 @@ fsdp_config:
   fsdp_sharding_strategy: FULL_SHARD
   fsdp_state_dict_type: SHARDED_STATE_DICT
   fsdp_offload_params: false
-  fsdp_use_orig_params: true        # LoRA 必须为 true
+  fsdp_use_orig_params: true
   fsdp_cpu_ram_efficient_loading: true
   fsdp_sync_module_states: true
   fsdp_backward_prefetch_policy: BACKWARD_PRE

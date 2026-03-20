@@ -1,23 +1,15 @@
 # workspace/configs/verl_grpo.yaml
-# veRL GRPO 配置 —— 4× A100 80GB，hybrid engine + RM 时序错开
+# veRL GRPO 配置 —— 4× A100 80GB，hybrid engine
 #
-# ══════════════════════════════════════════════════════
-#  每个 global step 的 GPU 显存时序（单卡峰值均 < 80GB）
+# prompt 与线上推理完全一致（SYSTEM_PROMPT + 完整 user）
+# max_prompt_length = system(1940) + user(2500) ≈ 4440，设 4600
 #
-#   rollout   │ vLLM TP=4        ~28GB  │ 生成 G=8 候选（SYSTEM_INFER 完整版）
-#             ↓ vLLM 权重卸载至 CPU
-#   RM score  │ RM FSDP 前向     ~20GB  │ 对候选打分（纯推理）
-#             ↓ RM 权重卸载至 CPU
-#   update    │ FSDP2 actor      ~36GB  │ GRPO advantage + PPO-clip
-#
-#  CPU 内存需求：actor(28GB) + RM(28GB) + ref(28GB) ≈ 84GB 常驻
-#  建议宿主机内存 ≥ 256GB
-# ══════════════════════════════════════════════════════
-#
-# 容器内运行：
-#   python -m verl.trainer.main_ppo \
-#       --config-path /workspace/configs \
-#       --config-name verl_grpo
+# 显存时序（单卡峰值均 < 80GB）：
+#   rollout  │ vLLM TP=4  ~28GB │ 生成 G=8 候选
+#            ↓ offload to CPU
+#   RM score │ RM FSDP   ~20GB │ 对候选打分
+#            ↓ offload to CPU
+#   update   │ FSDP2     ~36GB │ GRPO advantage + PPO-clip
 
 defaults:
   - _self_
@@ -26,7 +18,6 @@ data:
   train_files: /data/grpo_train.parquet
   val_files: ~
   train_batch_size: 64
-  # SYSTEM_INFER(~1940) + user(~2500) ≈ 4440 token，设 4600 留余量
   max_prompt_length: 4600
   max_response_length: 3000
   data_source_key: data_source
@@ -88,7 +79,6 @@ actor_rollout_ref:
     max_tokens: 3000
     min_tokens: 50
     tensor_parallel_size: 4
-    # prompt 变长（4600 vs 2800），KV cache 占用增大，保守设 0.50
     gpu_memory_utilization: 0.50
     enable_prefix_caching: true
     load_format: safetensors
@@ -101,17 +91,14 @@ actor_rollout_ref:
 
 reward_model:
   enable: true
-
   model:
     path: /saves/rm_merged
     trust_remote_code: true
     dtype: bfloat16
     use_flash_attention: false
-
   strategy: fsdp
   fsdp_config:
     param_offload: true
-
   rm_coeff: 0.3
   resource_pool_key: actor_rollout_ref
 

@@ -1,12 +1,9 @@
 ### workspace/configs/export_rm.yaml
-### 合并 RM LoRA → 完整权重（veRL reward_model 需要完整权重）
-
 model_name_or_path: /models/Qwen3-14B
 adapter_name_or_path: /saves/rm
 template: qwen3
 finetuning_type: lora
 trust_remote_code: true
-
 export_dir: /saves/rm_merged
 export_size: 4
 export_dtype: bfloat16

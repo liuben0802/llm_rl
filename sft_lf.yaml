@@ -1,7 +1,11 @@
 ### workspace/configs/sft_lf.yaml
 ### LLaMA-Factory SFT 训练配置
+### 全链路使用完整 prompt，无截断
+###
+### token 估算：
+###   system(~1940) + user(~2500) + response(~2850) ≈ 7290 token
+###   max_seq_length=8192 足够，无需压缩
 
-# 模型：从 /models（← 宿主机 /data4/mirror/Qwen）加载
 model_name_or_path: /models/Qwen3-14B
 trust_remote_code: true
 
@@ -15,22 +19,21 @@ lora_dropout: 0.05
 lora_target: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
 lora_bias: none
 
-# 数据：从 /data（← 宿主机 /data4/datas）加载
 dataset: rec_sft
 dataset_dir: /data
 template: qwen3
-cutoff_len: 6144
+# 完整 prompt 约 7290 token，设 8192 留余量
+cutoff_len: 8192
 overwrite_cache: true
 preprocessing_num_workers: 8
 
-# 输出：写入 /saves（← 宿主机 /data4/mirror/model/saves）
 output_dir: /saves/sft
 logging_dir: /workspace/logs/sft
 overwrite_output_dir: true
 
 num_train_epochs: 1
-per_device_train_batch_size: 2
-gradient_accumulation_steps: 4
+per_device_train_batch_size: 1     # 序列变长，batch 从 2 降到 1
+gradient_accumulation_steps: 8    # 等效 batch = 1×4GPU×8 = 32
 learning_rate: 2.0e-5
 lr_scheduler_type: cosine
 warmup_ratio: 0.05

@@ -1,12 +1,9 @@
 ### workspace/configs/export_sft.yaml
-### 合并 SFT LoRA → 完整权重（veRL 需要完整权重）
-
 model_name_or_path: /models/Qwen3-14B
 adapter_name_or_path: /saves/sft
 template: qwen3
 finetuning_type: lora
 trust_remote_code: true
-
 export_dir: /saves/sft_merged
 export_size: 4
 export_dtype: bfloat16

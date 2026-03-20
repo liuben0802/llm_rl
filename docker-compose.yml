@@ -1,28 +1,16 @@
 version: "3.8"
 
-# ══════════════════════════════════════════════════════
-#  推荐系统训练 Docker Compose
-#
-#  宿主机路径 → 容器挂载点：
-#    /data4/mirror/Qwen          → /models     (只读)
-#    /data4/datas                → /data       (读写)
-#    /data4/mirror/model/saves   → /saves      (读写)
-#    ./workspace                 → /workspace  (读写)
-#
-#  .env 说明：
-#    docker-compose 会自动读取同目录的 .env 文件。
-#    .env 中的变量通过两种方式生效：
-#      1. compose 文件的 ${VAR} 插值（镜像名、设备 id 等）
-#      2. environment 块里的 VAR=${VAR} 语法将 .env 值注入容器运行时
-#    修改 .env 后执行 docker compose up -d 即可更新所有容器。
-# ══════════════════════════════════════════════════════
+# 宿主机路径 → 容器挂载点：
+#   /data4/mirror/Qwen        → /models    只读，模型权重
+#   /data4/datas              → /data      读写，训练数据（含 teacher_responses.jsonl）
+#   /data4/mirror/model/saves → /saves     读写，checkpoint 输出
+#   ./workspace               → /workspace 读写，configs / src / logs
 
 x-gpu-0123: &gpu-0123
   deploy:
     resources:
       reservations:
         devices:
-            # ${GPU_IDS} 来自 .env，值为 "0,1,2,3"
           - driver: nvidia
             device_ids: ["0", "1", "2", "3"]
             capabilities: [gpu]
@@ -42,96 +30,27 @@ x-volumes: &volumes
     source: ./workspace
     target: /workspace
 
-# 所有容器共用的运行时环境变量
-# 格式：VAR=${VAR}  ← 右侧 ${VAR} 由 .env 插值，左侧是容器内变量名
 x-env: &env
-  environment:
-    CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
-    NCCL_DEBUG: ${NCCL_DEBUG}
-    NCCL_IB_DISABLE: ${NCCL_IB_DISABLE}
-    NCCL_P2P_DISABLE: ${NCCL_P2P_DISABLE}
-    CUDA_DEVICE_MAX_CONNECTIONS: ${CUDA_DEVICE_MAX_CONNECTIONS}
-    PYTHONPATH: ${PYTHONPATH}
-    TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE}
-    HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE}
-    VLLM_WORKER_MULTIPROC_METHOD: spawn
-    VLLM_ENGINE_CORE_TIMEOUT: 18000
-    HF_HUB_OFFLINE: 1
-    #    HF_DATASETS_OFFLINE: 1
-    #    TRANSFORMERS_OFFLINE: 1
-    #     NCCL_IB_DISABLE: 1
-    HF_HUB_DISABLE_TELEMETRY: 1
-    HF_HUB_ENABLE_HF_TRANSFER: 0
-    HF_HOME: /tmp/hf
-    TORCH_HOME: /tmp/torch
-    VLLM_USE_MODELSCOPE: True
-    #    NCCL_DEBUG: INFO
-    #    NCCL_P2P_DISABLE: 0
-    NCCL_SHM_DISABLE: 0
-    NCCL_SOCKET_IFNAME: eth0
-    VLLM_DISABLE_SHM_BROADCAST: 1
+  - CUDA_VISIBLE_DEVICES=0,1,2,3
+  - NCCL_DEBUG=WARN
+  - NCCL_IB_DISABLE=1
+  - NCCL_P2P_DISABLE=0
+  - CUDA_DEVICE_MAX_CONNECTIONS=1
+  - PYTHONPATH=/workspace
+  - TRANSFORMERS_OFFLINE=1
+  - HF_DATASETS_OFFLINE=1
 
 services:
 
-  # ── Teacher（仅数据生成阶段启动）──
-  teacher:
-    image: ${VLLM_IMAGE}           # vllm/vllm-openai:latest（来自 .env）
-    container_name: rec_teacher
-    restart: "no"
-    <<: [*gpu-0123, *env]
-    volumes: *volumes
-    ports:
-      - "8000:8000"
-    command:
-      - /models/qwen2.5-72B-GPTQ-Int4
-      - --quantization
-      - gptq_marlin
-      - --dtype
-      - float16
-      - --served-model-name
-      - qwen2.5-72b
-      - --gpu-memory-utilization
-      - "0.9"
-      - --max-num-batched-tokens
-      - "65536"
-      - --max-num-seqs
-      - "64"
-      - --enable-chunked-prefill
-      - --enable-prefix-caching
-      - --block-size
-      - "16"
-      - --trust-remote-code
-      - --tensor-parallel-size
-      - "4"
-      - --max-model-len
-      - "16384"
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 120s
-    shm_size: "16gb"
-    ulimits:
-      memlock: -1
-
-  # ── LLaMA-Factory（SFT + RM）──
   llamafactory:
-    image: ${LLAMAFACTORY_IMAGE}   # hiyouga/llamafactory:0.9.4（来自 .env）
+    image: hiyouga/llamafactory:latest
     container_name: rec_llamafactory
     restart: "no"
-    <<: [*gpu-0123, *env]
+    <<: *gpu-0123
     volumes: *volumes
     environment:
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
-      NCCL_DEBUG: ${NCCL_DEBUG}
-      NCCL_IB_DISABLE: ${NCCL_IB_DISABLE}
-      NCCL_P2P_DISABLE: ${NCCL_P2P_DISABLE}
-      CUDA_DEVICE_MAX_CONNECTIONS: ${CUDA_DEVICE_MAX_CONNECTIONS}
-      PYTHONPATH: ${PYTHONPATH}
-      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE}
-      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE}
-      DATASET_DIR: /data            # LLaMA-Factory 数据集注册表目录，固定值
+      - *env
+      - DATASET_DIR=/data
     working_dir: /workspace
     command: tail -f /dev/null
     shm_size: "16gb"
@@ -140,23 +59,15 @@ services:
       stack: 67108864
     ipc: host
 
-  # ── veRL（GRPO）──
   verl:
-    image: ${VERL_IMAGE}           # verlai/verl:vllm012.latest（来自 .env）
+    image: verlai/verl:vllm012.latest
     container_name: rec_verl
     restart: "no"
-    <<: [*gpu-0123, *env]
+    <<: *gpu-0123
     volumes: *volumes
     environment:
-      CUDA_VISIBLE_DEVICES: ${CUDA_VISIBLE_DEVICES}
-      NCCL_DEBUG: ${NCCL_DEBUG}
-      NCCL_IB_DISABLE: ${NCCL_IB_DISABLE}
-      NCCL_P2P_DISABLE: ${NCCL_P2P_DISABLE}
-      CUDA_DEVICE_MAX_CONNECTIONS: ${CUDA_DEVICE_MAX_CONNECTIONS}
-      PYTHONPATH: ${PYTHONPATH}
-      TRANSFORMERS_OFFLINE: ${TRANSFORMERS_OFFLINE}
-      HF_DATASETS_OFFLINE: ${HF_DATASETS_OFFLINE}
-      RAY_ADDRESS: local            # veRL 单机模式，固定值
+      - *env
+      - RAY_ADDRESS=local
     working_dir: /workspace
     command: tail -f /dev/null
     shm_size: "32gb"

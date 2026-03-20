@@ -1,24 +1,12 @@
 """
-src/prompt_utils.py  ——  训练用压缩 prompt + 智能截断
-（逻辑与 v2 相同，此处直接复用）
+src/prompt_utils.py
+
+全链路只有一套 prompt，训练和推理完全一致。
+不再需要 SYSTEM_TRAIN / SYSTEM_INFER 的区分。
 """
 
-# ══════════════════════════════════════════════════════════════
-#  两套 System Prompt，职责完全不同，不可混用
-#
-#  SYSTEM_TRAIN (~500 token)
-#    用于 SFT / RM / GRPO 训练。
-#    省略步骤说明、示例、自检清单，只保留格式和核心评分规则。
-#    训练时模型从 (input, output) 对学行为，不需要完整规则手册。
-#
-#  SYSTEM_INFER (~1940 token)
-#    用于线上推理。
-#    包含完整的 CoT 执行步骤、示例输出、质量自检，
-#    引导模型逐步推理，输出质量更稳定。
-# ══════════════════════════════════════════════════════════════
-
-# ── 推理用完整 system prompt（~1940 token）──
-SYSTEM_INFER = """\
+# ── 唯一的 system prompt，训练和推理共用 ──
+SYSTEM_PROMPT = """\
 # 角色
 你是商品推荐系统，严格按照以下步骤生成JSON格式推荐结果。
 
@@ -106,39 +94,6 @@ SYSTEM_INFER = """\
 - [ ] 总数是否不超过50个\
 """
 
-# ── 训练用压缩 system prompt（~500 token）──
-# 推理时使用上方 SYSTEM_INFER，此处仅供训练使用
-SYSTEM_TRAIN = """\
-你是商品推荐系统。输出且仅输出一个合法JSON对象，不含任何其他文字。
-
-格式：{"1":{"name":"完整商品名","score":0.900,"reason":"≤20汉字"},...}
-
-评分规则：
-- 90天+去年同期都有 → 0.950；仅90天 → 0.900；仅去年同期 → 0.850
-- 候选补充 → 0.600~0.750
-- 3天内购买：完全相同 → 删除；同品牌同子品类 → 分数×0.5
-
-输出规则：
-- key从"1"连续递增；score保留3位小数；禁止null/重复商品名
-- 相邻商品不同品牌；单品牌≤10个；总数≤50
-- 所有name必须来自输入原始数据，禁止虚构
-
-reason：两表都有→"高频复购商品"；仅90天→"近期热销"；仅去年→"去年同期热销"；降权→"近期已购降权"；候选→"稳定品牌推荐"或"品类扩充"\
-"""
-
-RM_SYSTEM_TRAIN = """\
-你是推荐系统评估专家。对推荐结果打分，输出且仅输出JSON。
-
-维度（共100分）：
-- format_score(0-20): JSON合法/key连续/score范围/reason≤20字/无null
-- source_score(0-20): 无虚构商品/无重复商品名
-- business_score(0-30): 高价值商品优先/降权规则/品牌多样性
-- quality_score(0-20): 分数合理/reason准确/数量合理(10~50)
-- coverage_score(0-10): 高价值商品覆盖率
-
-输出：{"format_score":N,"source_score":N,"business_score":N,"quality_score":N,"coverage_score":N,"total_score":N,"normalized_reward":0.XX}\
-"""
-
 
 def build_user_prompt(
     shop_name: str,
@@ -148,46 +103,24 @@ def build_user_prompt(
     products_lastyear: list[str],
     products_3d: list[str],
     candidate_pool: str = "",
-    *,
-    tokenizer=None,
-    max_tokens: int = 2200,
 ) -> str:
     """
-    分级截断：永不裁 products_3d；优先裁 candidate_pool → lastyear → 90d
-    1 汉字 ≈ 1.5 token（无 tokenizer 时的估算）
+    构建 user prompt，训练和推理共用同一函数，不做任何截断。
+    Qwen3-14B 支持 32k context，实际序列长度约 7300 token，不需要截断。
     """
-    def _tok(t: str) -> int:
-        if tokenizer is not None:
-            return len(tokenizer.encode(t, add_special_tokens=False))
-        return int(len(t) * 1.5)
-
-    def _render(p90, ply, p3d, pool) -> str:
-        parts = [
-            f"【商店】{shop_name}",
-            f"【品类】{categories}",
-            f"【高频品牌】{brands}",
-            "",
-            "【90天购买】",
-            "、".join(p90) if p90 else "无",
-            "",
-            "【去年同期购买】",
-            "、".join(ply) if ply else "无",
-            "",
-            f"【3天内购买（降权/删除）】{'、'.join(p3d) if p3d else '无'}",
-        ]
-        if pool and pool.strip():
-            parts += ["", "【候选补充池（推荐不足50时使用）】", pool.strip()]
-        return "\n".join(parts)
-
-    text = _render(products_90d, products_lastyear, products_3d, candidate_pool)
-    if _tok(text) <= max_tokens:
-        return text
-    text = _render(products_90d, products_lastyear, products_3d, "")
-    if _tok(text) <= max_tokens:
-        return text
-    ply = list(products_lastyear)[:20]
-    text = _render(products_90d, ply, products_3d, "")
-    if _tok(text) <= max_tokens:
-        return text
-    p90 = list(products_90d)[:20]
-    return _render(p90, ply, products_3d, "")
+    parts = [
+        f"【商店】{shop_name}",
+        f"【品类】{categories}",
+        f"【高频品牌】{brands}",
+        "",
+        "【90天购买】",
+        "、".join(products_90d) if products_90d else "无",
+        "",
+        "【去年同期购买】",
+        "、".join(products_lastyear) if products_lastyear else "无",
+        "",
+        f"【3天内购买（降权/删除）】{'、'.join(products_3d) if products_3d else '无'}",
+    ]
+    if candidate_pool and candidate_pool.strip():
+        parts += ["", "【候选补充池（推荐不足50时使用）】", candidate_pool.strip()]
+    return "\n".join(parts)
