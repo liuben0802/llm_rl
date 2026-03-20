@@ -19,7 +19,7 @@ from tqdm import tqdm
 from openai import OpenAI
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from src.prompt_utils import SYSTEM_TRAIN, build_user_prompt
+from src.prompt_utils import SYSTEM_TRAIN, SYSTEM_INFER, build_user_prompt
 from src.reward_fn import rule_reward
 
 TEACHER_BASE  = "http://localhost:8000/v1"
@@ -137,19 +137,39 @@ def make_rm(samples: list[dict], min_gap: float = 0.15):
 # ────────────────────────────────────────────────────────────────
 
 def make_grpo(samples: list[dict]):
+    """
+    GRPO prompt 必须与线上推理完全一致：
+      - system prompt → SYSTEM_INFER（完整版，~1940 token）
+      - user prompt   → 不截断（max_tokens=99999）
+    这样 rollout 生成的 8 条候选和 reward 信号，
+    与线上真实分布对齐，RL 优化方向才正确。
+
+    注意：max_prompt_length 在 verl_grpo.yaml 中已改为 4600，
+    可容纳 SYSTEM_INFER(1940) + user(2500) ≈ 4440 token。
+    """
     rows = []
     for s in samples:
-        user = _user(s)
+        # user prompt 推理时不截断
+        user = build_user_prompt(
+            shop_name=s["shop_name"],
+            categories=s["categories"],
+            brands=s["brands"],
+            products_90d=s["products_90d"],
+            products_lastyear=s["products_lastyear"],
+            products_3d=s.get("products_3d", []),
+            candidate_pool=s.get("candidate_pool", ""),
+            max_tokens=99999,           # ← 不截断
+        )
         rows.append({
             "prompt": json.dumps([
-                {"role":"system","content":SYSTEM_TRAIN},
-                {"role":"user",  "content":user},
+                {"role": "system", "content": SYSTEM_INFER},   # ← 完整版
+                {"role": "user",   "content": user},
             ]),
             "data_source": "rec_system",
             "ground_truth": json.dumps({
                 "products_90d":      s["products_90d"],
                 "products_lastyear": s["products_lastyear"],
-                "products_3d":       s.get("products_3d",[]),
+                "products_3d":       s.get("products_3d", []),
             }),
         })
     path = OUT / "grpo_train.parquet"

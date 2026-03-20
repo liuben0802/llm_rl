@@ -1,0 +1,23 @@
+# workspace/data/dataset_info.json
+# LLaMA-Factory 数据集注册表，容器内通过 DATASET_DIR=/workspace/data 定位
+{
+  "rec_sft": {
+    "file_name": "sft_train.jsonl",
+    "formatting": "sharegpt",
+    "columns": { "messages": "conversations" },
+    "tags": {
+      "role_tag": "role", "content_tag": "content",
+      "user_tag": "user", "assistant_tag": "assistant", "system_tag": "system"
+    }
+  },
+  "rec_rm": {
+    "file_name": "rm_train.jsonl",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": { "chosen": "chosen", "rejected": "rejected" },
+    "tags": {
+      "role_tag": "role", "content_tag": "content",
+      "user_tag": "user", "assistant_tag": "assistant", "system_tag": "system"
+    }
+  }
+}

@@ -55,9 +55,9 @@ def rule_reward(
     # 维度3：业务规则（30分）
     biz = 30.0
     high = set(products_90d) | set(products_lastyear)
-    rec  = {v.get("name", "") for _, v in items if isinstance(v, dict)}
-    cov  = len(high & rec) / max(len(high), 1)
-    biz  = biz - 10 + cov * 10
+    rec = {v.get("name", "") for _, v in items if isinstance(v, dict)}
+    cov = len(high & rec) / max(len(high), 1)
+    biz = biz - 10 + cov * 10
     p3d_set = set(products_3d)
     biz -= min(sum(2 for _, v in items if isinstance(v, dict)
                    and v.get("name") in p3d_set and (v.get("score") or 0) > 0.6), 10)

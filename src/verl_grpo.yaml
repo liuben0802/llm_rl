@@ -26,7 +26,9 @@ data:
   train_files: /workspace/data/grpo_train.parquet
   val_files: ~
   train_batch_size: 64
-  max_prompt_length: 2800
+  # SYSTEM_INFER(~1940) + user(~2500) = ~4440 token，设 4600 留余量
+  # 原来用 SYSTEM_TRAIN 时只需 2800，现在必须放大
+  max_prompt_length: 4600
   max_response_length: 3000
   data_source_key: data_source
   reward_fn_key: ground_truth
@@ -87,7 +89,8 @@ actor_rollout_ref:
     max_tokens: 3000
     min_tokens: 50
     tensor_parallel_size: 4
-    gpu_memory_utilization: 0.55   # RM 时序错开后可从 0.45 提升到 0.55
+    # prompt 变长（4600 vs 2800），KV cache 占用增大，从 0.55 调低到 0.50
+    gpu_memory_utilization: 0.50
     enable_prefix_caching: true
     load_format: safetensors
     sync_backend: nccl
