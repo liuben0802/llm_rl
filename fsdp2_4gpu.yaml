@@ -10,6 +10,7 @@ mixed_precision: bf16
 rdzv_backend: static
 same_network: true
 use_cpu: false
+main_process_port: 29501
 
 fsdp_config:
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP

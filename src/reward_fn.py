@@ -5,7 +5,7 @@ from __future__ import annotations
 import json, re
 import numpy as np
 
-sku_brand_dict_path = "/app/data/sku_brand_dict.npy"
+sku_brand_dict_path = "/data/sku_brand_dict.npy"
 sku_brand_dict, _ = np.load(sku_brand_dict_path, allow_pickle=True)
 
 def rule_reward(
@@ -22,6 +22,7 @@ def rule_reward(
         data: dict = json.loads(m.group())
     except (json.JSONDecodeError, ValueError):
         return 0.02
+
 
     items = list(data.items())
 

@@ -31,26 +31,25 @@ x-volumes: &volumes
     target: /workspace
 
 x-env: &env
-  - CUDA_VISIBLE_DEVICES=0,1,2,3
-  - NCCL_DEBUG=WARN
-  - NCCL_IB_DISABLE=1
-  - NCCL_P2P_DISABLE=0
-  - CUDA_DEVICE_MAX_CONNECTIONS=1
-  - PYTHONPATH=/workspace
-  - TRANSFORMERS_OFFLINE=1
-  - HF_DATASETS_OFFLINE=1
+    CUDA_VISIBLE_DEVICES: "0,1,2,3"
+    NCCL_DEBUG: "WARN"
+    NCCL_IB_DISABLE: "1"
+    CUDA_DEVICE_MAX_CONNECTIONS: "1"
+    PYTHONPATH: "/workspace"
+    TRANSFORMERS_OFFLINE: "1"
+    HF_DATASETS_OFFLINE: "1"
 
 services:
 
   llamafactory:
-    image: hiyouga/llamafactory:latest
+    image: ${LLAMAFACTORY_IMAGE}
     container_name: rec_llamafactory
     restart: "no"
     <<: *gpu-0123
     volumes: *volumes
     environment:
-      - *env
-      - DATASET_DIR=/data
+      <<: *env
+      RAY_ADDRESS: local
     working_dir: /workspace
     command: tail -f /dev/null
     shm_size: "16gb"
@@ -60,14 +59,15 @@ services:
     ipc: host
 
   verl:
-    image: verlai/verl:vllm012.latest
+    image: ${VERL_IMAGE}
     container_name: rec_verl
     restart: "no"
     <<: *gpu-0123
     volumes: *volumes
     environment:
-      - *env
-      - RAY_ADDRESS=local
+      <<: *env
+      RAY_ADDRESS: local
+      NCCL_P2P_DISABLE: "0"
     working_dir: /workspace
     command: tail -f /dev/null
     shm_size: "32gb"

@@ -13,6 +13,10 @@ verl() { docker exec -it "$VERL" bash -c "export ${GPU_ENV}; $*"; }
 
 divider() { echo ""; echo "══════════════════════════════════════"; echo "  $*"; echo "══════════════════════════════════════"; }
 
+stop_containers(){
+  docker compose down --remove-orphans
+}
+
 start_containers() {
   divider "启动容器"
   docker compose up -d llamafactory verl
@@ -84,7 +88,7 @@ EOF
   fi
   echo "  ✓ 最终模型 → /data4/mirror/model/saves/final"
 }
-
+stop_containers
 start_containers
 
 case "$STAGE" in
