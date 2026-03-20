@@ -1,14 +1,14 @@
 ### workspace/configs/export_sft.yaml
-### LLaMA-Factory 导出配置 —— 合并 SFT LoRA 为完整权重（veRL 需要）
+### 合并 SFT LoRA → 完整权重（veRL 需要完整权重）
 
-model_name_or_path: /workspace/.cache/huggingface/hub/Qwen3-14B
-adapter_name_or_path: /workspace/checkpoints/sft
+model_name_or_path: /models/Qwen3-14B
+adapter_name_or_path: /saves/sft
 template: qwen3
 finetuning_type: lora
 trust_remote_code: true
 
-export_dir: /workspace/checkpoints/sft_merged
-export_size: 4           # 分 4 个 safetensors 文件，每个约 7GB
+export_dir: /saves/sft_merged
+export_size: 4
 export_dtype: bfloat16
 export_device: cuda
 export_legacy_format: false

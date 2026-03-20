@@ -1,5 +1,3 @@
-# workspace/data/dataset_info.json
-# LLaMA-Factory 数据集注册表，容器内通过 DATASET_DIR=/workspace/data 定位
 {
   "rec_sft": {
     "file_name": "sft_train.jsonl",

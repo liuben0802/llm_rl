@@ -1,7 +1,8 @@
 ### workspace/configs/rm_lf.yaml
 ### LLaMA-Factory Reward Model 训练配置
 
-model_name_or_path: /workspace/checkpoints/sft
+# base 从 SFT checkpoint 加载（继承任务对齐知识）
+model_name_or_path: /saves/sft
 trust_remote_code: true
 
 stage: rm
@@ -16,13 +17,13 @@ lora_bias: none
 create_new_adapter: true
 
 dataset: rec_rm
-dataset_dir: /workspace/data
+dataset_dir: /data
 template: qwen3
 cutoff_len: 6144
 overwrite_cache: true
 preprocessing_num_workers: 8
 
-output_dir: /workspace/checkpoints/rm
+output_dir: /saves/rm
 logging_dir: /workspace/logs/rm
 overwrite_output_dir: true
 
