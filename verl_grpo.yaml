@@ -1,0 +1,146 @@
+# workspace/configs/verl_grpo.yaml
+# veRL GRPO 配置 —— 4× A100 80GB，hybrid engine + RM 时序错开
+#
+# ══════════════════════════════════════════════════════
+#  每个 global step 的 GPU 显存时序（单卡峰值均 < 80GB）
+#
+#   rollout   │ vLLM TP=4        ~28GB  │ 生成 G=8 候选
+#             ↓ vLLM 权重卸载至 CPU
+#   RM score  │ RM FSDP 前向     ~20GB  │ 对候选打分（纯推理）
+#             ↓ RM 权重卸载至 CPU
+#   update    │ FSDP2 actor      ~36GB  │ GRPO advantage + PPO-clip
+#
+#  CPU 内存需求：actor(28GB) + RM(28GB) + ref(28GB) ≈ 84GB（常驻 CPU）
+#  建议宿主机内存 ≥ 256GB
+# ══════════════════════════════════════════════════════
+#
+# 容器内运行命令：
+#   python -m verl.trainer.main_ppo \
+#       --config-path /workspace/configs \
+#       --config-name verl_grpo
+
+defaults:
+  - _self_
+
+data:
+  train_files: /workspace/data/grpo_train.parquet
+  val_files: ~
+  train_batch_size: 64
+  max_prompt_length: 2800
+  max_response_length: 3000
+  data_source_key: data_source
+  reward_fn_key: ground_truth
+
+actor_rollout_ref:
+
+  hybrid_engine: true
+
+  model:
+    path: /workspace/checkpoints/sft_merged
+    trust_remote_code: true
+    dtype: bfloat16
+    attn_implementation: flash_attention_2
+
+  actor_lora:
+    enable: true
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+
+  actor:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: false
+      grad_offload: false
+      optimizer_offload: false
+    ppo_mini_batch_size: 16
+    ppo_micro_batch_size: 2
+    grad_clip: 1.0
+    clip_ratio: 0.2
+    entropy_coeff: 0.001
+    use_kl_loss: true
+    kl_loss_coeff: 0.01
+    kl_loss_type: low_var_kl
+    optim:
+      type: adamw
+      lr: 5.0e-6
+      weight_decay: 0.01
+      betas: [0.9, 0.95]
+    lr_scheduler:
+      type: cosine
+      warmup_steps: 10
+      min_lr_ratio: 0.1
+
+  rollout:
+    strategy: vllm
+    n: 8
+    temperature: 0.8
+    top_p: 0.9
+    max_tokens: 3000
+    min_tokens: 50
+    tensor_parallel_size: 4
+    gpu_memory_utilization: 0.55   # RM 时序错开后可从 0.45 提升到 0.55
+    enable_prefix_caching: true
+    load_format: safetensors
+    sync_backend: nccl
+
+  ref:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: true          # ref model CPU offload，只在 KL 计算时加载
+
+# ── Reward Model（与 actor 共用 4 卡，时序错开）──
+reward_model:
+  enable: true
+
+  model:
+    path: /workspace/checkpoints/rm_merged
+    trust_remote_code: true
+    dtype: bfloat16
+    use_flash_attention: false     # 纯推理，关闭 FA 节省峰值显存
+
+  strategy: fsdp
+  fsdp_config:
+    param_offload: true            # RM 打分完立即 offload，腾出显存给 actor update
+
+  # final_reward = rule_reward × 0.7 + rm_score × 0.3
+  rm_coeff: 0.3
+
+  # 与 actor_rollout_ref 共用同一资源池（时序错开，不同时占显存）
+  resource_pool_key: actor_rollout_ref
+
+# ── 规则 reward（与神经 RM 按 rm_coeff 混合）──
+custom_reward_function:
+  path: /workspace/src/reward_fn.py
+  name: compute_score
+
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo
+  grpo_group_size: 8
+
+trainer:
+  total_epochs: 2
+  project_name: rec_grpo_4gpu
+  experiment_name: qwen3_14b_rec
+  logger: ["tensorboard", "console"]
+  log_freq: 5
+  save_freq: 50
+  test_freq: 100
+  default_local_dir: /workspace/checkpoints/grpo
+
+ray_worker_group_spec:
+  num_gpus: 4
+  num_cpus_per_worker: 8
+
+resource_pool_spec:
+  actor_rollout_ref: [0, 1, 2, 3]

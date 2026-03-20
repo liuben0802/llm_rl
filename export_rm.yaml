@@ -1,0 +1,14 @@
+### workspace/configs/export_rm.yaml
+### 导出 RM LoRA 为完整权重，供 veRL reward_model 加载
+
+model_name_or_path: /workspace/.cache/huggingface/hub/Qwen3-14B
+adapter_name_or_path: /workspace/checkpoints/rm
+template: qwen3
+finetuning_type: lora
+trust_remote_code: true
+
+export_dir: /workspace/checkpoints/rm_merged
+export_size: 4
+export_dtype: bfloat16
+export_device: cuda
+export_legacy_format: false

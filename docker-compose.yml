@@ -1,0 +1,103 @@
+version: "3.8"
+
+# ══════════════════════════════════════════════════════
+#  推荐系统训练 Docker Compose
+#  宿主机目录 ./workspace 挂载进所有容器的 /workspace
+#  三阶段顺序执行，GPU 不冲突
+# ══════════════════════════════════════════════════════
+
+x-gpu-all: &gpu-all            # 固定使用 GPU 0-3（共 8 卡，只用前四张）
+  deploy:
+    resources:
+      reservations:
+        devices:
+          - driver: nvidia
+            device_ids: ["0", "1", "2", "3"]   # 指定卡号，不用 count:all
+            capabilities: [gpu]
+
+x-workspace: &workspace        # 共享工作目录（数据/配置/checkpoint）
+  - type: bind
+    source: ./workspace
+    target: /workspace
+
+x-env: &env
+  # ── GPU 限制：容器内只可见 0-3 号卡 ──
+  # device_ids 决定哪些卡被映射进容器，映射后编号从 0 开始重排
+  # CUDA_VISIBLE_DEVICES 在容器内再做一层保险，防止框架绕过 Docker 限制
+  - CUDA_VISIBLE_DEVICES=0,1,2,3
+  - NCCL_DEBUG=WARN
+  - NCCL_IB_DISABLE=1
+  - NCCL_P2P_DISABLE=0
+  - CUDA_DEVICE_MAX_CONNECTIONS=1
+  - PYTHONPATH=/workspace
+  - HF_HOME=/workspace/.cache/huggingface
+  - TRANSFORMERS_CACHE=/workspace/.cache/huggingface
+
+services:
+
+  # ── Teacher 模型（Qwen2.5-72B，仅数据生成阶段启动）──
+  teacher:
+    image: vllm/vllm-openai:latest
+    container_name: rec_teacher
+    restart: "no"              # 不自动重启，用完 stop
+    <<: *gpu-all
+    volumes: *workspace
+    environment: *env
+    ports:
+      - "8000:8000"
+    command: >
+      python -m vllm.entrypoints.openai.api_server
+      --model /workspace/.cache/huggingface/hub/Qwen2.5-72B-Instruct
+      --tensor-parallel-size 4
+      --max-model-len 8192
+      --gpu-memory-utilization 0.90
+      --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s       # 72B 模型加载慢，给足时间
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+
+  # ── LLaMA-Factory（SFT + RM，Stage 1 & 2）──
+  llamafactory:
+    image: hiyouga/llamafactory:latest
+    container_name: rec_llamafactory
+    restart: "no"
+    <<: *gpu-all
+    volumes: *workspace
+    environment:
+      - *env
+      # LLaMA-Factory 数据集注册表路径
+      - DATASET_DIR=/workspace/data
+    working_dir: /workspace
+    # 常驻：等待宿主机 docker exec 发指令
+    command: tail -f /dev/null
+    shm_size: "16gb"
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host                  # FSDP2 进程间通信需要 host IPC
+
+  # ── veRL（GRPO，Stage 3）──
+  verl:
+    image: verlai/verl:vemlp-th2.4.0-cu124-vllm0.6.3-ray2.10-te2.0-v0.3.0.post1
+    container_name: rec_verl
+    restart: "no"
+    <<: *gpu-all
+    volumes: *workspace
+    environment:
+      - *env
+      - RAY_ADDRESS=local      # 单机模式，不需要 Ray cluster
+    working_dir: /workspace
+    command: tail -f /dev/null
+    shm_size: "32gb"           # veRL vLLM rollout 需要更大 shm
+    ulimits:
+      memlock: -1
+      stack: 67108864
+    ipc: host
+    # veRL 需要访问宿主机 GPU 拓扑信息
+    pid: host

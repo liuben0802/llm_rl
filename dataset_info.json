@@ -1,0 +1,32 @@
+{
+  "rec_sft": {
+    "file_name": "sft_train.jsonl",
+    "formatting": "sharegpt",
+    "columns": {
+      "messages": "conversations"
+    },
+    "tags": {
+      "role_tag":      "role",
+      "content_tag":   "content",
+      "user_tag":      "user",
+      "assistant_tag": "assistant",
+      "system_tag":    "system"
+    }
+  },
+  "rec_rm": {
+    "file_name": "rm_train.jsonl",
+    "formatting": "sharegpt",
+    "ranking": true,
+    "columns": {
+      "chosen":   "chosen",
+      "rejected": "rejected"
+    },
+    "tags": {
+      "role_tag":      "role",
+      "content_tag":   "content",
+      "user_tag":      "user",
+      "assistant_tag": "assistant",
+      "system_tag":    "system"
+    }
+  }
+}

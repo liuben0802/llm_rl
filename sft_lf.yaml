@@ -1,0 +1,66 @@
+### configs/sft_lf.yaml
+### LLaMA-Factory SFT 训练配置 —— Qwen3-14B，4× A100 80GB
+###
+### 运行命令：
+###   accelerate launch \
+###     --config_file configs/fsdp2_4gpu.yaml \
+###     $(which llamafactory-cli) train configs/sft_lf.yaml
+
+# ── 模型 ──
+model_name_or_path: Qwen/Qwen3-14B
+trust_remote_code: true
+
+# ── 任务 ──
+stage: sft
+do_train: true
+finetuning_type: lora
+
+# ── LoRA ──
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target: q_proj,k_proj,v_proj,o_proj,gate_proj,up_proj,down_proj
+lora_bias: none
+
+# ── 数据集 ──
+# dataset_info.json 必须放在 dataset_dir 目录下
+dataset: rec_sft
+dataset_dir: data
+template: qwen3          # Qwen3 chat template；若报错改为 qwen2
+cutoff_len: 6144         # system(500)+user(2200)+response(2850)≈5550，留余量
+overwrite_cache: true
+preprocessing_num_workers: 8
+
+# ── 输出 ──
+output_dir: checkpoints/sft
+logging_dir: logs/sft
+overwrite_output_dir: true
+
+# ── 训练超参 ──
+num_train_epochs: 1
+per_device_train_batch_size: 2
+gradient_accumulation_steps: 4    # 等效 batch = 2×4GPU×4 = 32
+learning_rate: 2.0e-5
+lr_scheduler_type: cosine
+warmup_ratio: 0.05
+weight_decay: 0.01
+max_grad_norm: 1.0
+
+# ── 精度 & 效率 ──
+bf16: true
+flash_attn: fa2                    # Flash Attention 2，A100 必开
+gradient_checkpointing: true
+packing: true                      # 多短样本合并，GPU 利用率从 40% → 85%+
+neat_packing: true                 # 避免跨样本 attention 污染
+
+# ── 日志 & 保存 ──
+logging_steps: 10
+save_steps: 200
+save_total_limit: 2
+plot_loss: true
+report_to: tensorboard
+
+# ── 其他 ──
+dataloader_num_workers: 4
+dataloader_pin_memory: true
+ddp_timeout: 180000

@@ -1,0 +1,19 @@
+### configs/export_sft.yaml
+### LLaMA-Factory 导出配置 —— 将 SFT LoRA 合并到 base 并导出完整权重
+### veRL 需要完整权重（不接受 PEFT adapter）
+###
+### 运行命令：
+###   llamafactory-cli export configs/export_sft.yaml
+
+model_name_or_path: Qwen/Qwen3-14B
+adapter_name_or_path: checkpoints/sft   # 指向 LoRA adapter 目录
+template: qwen3
+finetuning_type: lora
+trust_remote_code: true
+
+# 导出目标
+export_dir: checkpoints/sft_merged
+export_size: 4          # 分 4 个 safetensors 文件（每个约 7GB）
+export_dtype: bfloat16
+export_device: cuda     # 使用 GPU 合并速度更快
+export_legacy_format: false
