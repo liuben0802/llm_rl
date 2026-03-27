@@ -1,0 +1,159 @@
+# workspace/configs/verl_grpo.yaml
+# veRL GRPO 训练配置
+# 镜像：verlai/verl:sgl059.latest
+# 硬件：4× A100 80GB，GPU 0-3
+#
+# ══════════════════════════════════════════════════════
+#  每个 global step 显存时序（hybrid engine，4 卡共用）
+#
+#   ① rollout   SGLang TP=4   ~28GB/卡   生成 G=8 候选
+#              ↓ SGLang 权重卸载 CPU（nccl sync_weights 机制）
+#   ② RM score  FSDP 前向      ~20GB/卡   规则×0.7 + RM×0.3
+#              ↓ RM param_offload=true 卸载 CPU
+#   ③ update    FSDP2 actor    ~36GB/卡   PPO-clip + KL loss
+#
+#  三阶段峰值均 < 80GB，CPU 内存需容纳三套权重 ≈ 84GB
+# ══════════════════════════════════════════════════════
+
+defaults:
+  - _self_
+
+# ── 数据 ──
+data:
+  train_files: /data/grpo_train.parquet
+  val_files: ~
+  train_batch_size: 64                # 每轮 rollout 的 prompt 数
+  max_prompt_length: 4600             # system(~1940) + user(~2500) ≈ 4440，留余量
+  max_response_length: 3000
+  data_source_key: data_source
+  reward_fn_key: ground_truth
+
+# ── Actor / Rollout / Ref（4 卡 hybrid engine）──
+actor_rollout_ref:
+
+  hybrid_engine: true                 # 同一组 4 卡交替承担 rollout 和 training
+
+  model:
+    path: /saves/sft_merged           # LLaMA-Factory 导出的完整 SFT 权重
+    trust_remote_code: true
+    dtype: bfloat16
+    attn_implementation: flash_attention_2
+
+  # LoRA（在 sft_merged 上重新挂，节省训练显存）
+  actor_lora:
+    enable: true
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.05
+    target_modules:
+      - q_proj
+      - k_proj
+      - v_proj
+      - o_proj
+      - gate_proj
+      - up_proj
+      - down_proj
+
+  actor:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: false            # actor 训练时不 offload，保持速度
+      grad_offload: false
+      optimizer_offload: false
+    ppo_mini_batch_size: 16           # 每次 PPO 更新的 mini batch 大小
+    ppo_micro_batch_size: 2           # 梯度累积的 micro batch 大小
+    grad_clip: 1.0
+    clip_ratio: 0.2                   # PPO ε clip 系数
+    entropy_coeff: 0.001
+    use_kl_loss: true
+    kl_loss_coeff: 0.01               # KL 惩罚，防止偏离 ref 太远
+    kl_loss_type: low_var_kl
+    optim:
+      type: adamw
+      lr: 5.0e-6                      # RL 阶段 LR 比 SFT 小 4x
+      weight_decay: 0.01
+      betas: [0.9, 0.95]
+    lr_scheduler:
+      type: cosine
+      warmup_steps: 10
+      min_lr_ratio: 0.1
+
+  # SGLang rollout 配置
+  rollout:
+    strategy: sglang                  # 使用 SGLang 作为推理引擎
+
+    # 采样参数
+    n: 8                              # G=8：每个 prompt 生成 8 条候选
+    temperature: 0.8
+    top_p: 0.9
+    max_new_tokens: 3000
+    min_new_tokens: 50
+
+    # 并行与显存
+    tensor_parallel_size: 4           # 4 卡 TP
+    mem_fraction_static: 0.50         # SGLang 静态显存占比
+                                      # hybrid engine 下设 0.50，给 actor update 留空间
+
+    # SGLang 特有优化
+    enable_cache: true                # 开启 KV cache 复用
+
+    # hybrid engine 权重同步：actor 更新后同步到 SGLang engine
+    sync_backend: nccl
+
+  # Reference policy（冻结，CPU offload 节省显存）
+  ref:
+    strategy: fsdp
+    fsdp_config:
+      param_offload: true             # ref 只在 KL 计算时从 CPU 加载
+
+# ── Reward Model（与 actor 共用 4 卡，时序错开）──
+reward_model:
+  enable: true
+
+  model:
+    path: /saves/rm_merged            # LLaMA-Factory 导出的完整 RM 权重
+    trust_remote_code: true
+    dtype: bfloat16
+    use_flash_attention: false        # 纯前向推理，关闭 FA 降低峰值显存
+
+  strategy: fsdp
+  fsdp_config:
+    param_offload: true               # RM 打分完成后立即 offload，腾给 actor update
+
+  # final_reward = rule_reward × (1 - 0.3) + rm_score × 0.3
+  rm_coeff: 0.3
+
+  # 与 actor_rollout_ref 共用同一资源池（时序错开，不同时占显存）
+  resource_pool_key: actor_rollout_ref
+
+# ── 规则 reward 函数 ──
+custom_reward_function:
+  path: /workspace/src/reward_fn.py
+  name: compute_score
+
+# ── GRPO 算法 ──
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo                 # 组内归一化 advantage，无需 critic
+  grpo_group_size: 8                  # 必须与 rollout.n 一致
+
+# ── Trainer ──
+trainer:
+  total_epochs: 2
+  project_name: rec_grpo
+  experiment_name: qwen3_14b_rec
+  logger: ["tensorboard", "console"]
+  log_freq: 5
+  save_freq: 50                       # 每 50 global step 保存一次
+  test_freq: 100
+  default_local_dir: /saves/grpo
+
+# ── Ray 资源（单机 4 GPU）──
+ray_worker_group_spec:
+  num_gpus: 4
+  num_cpus_per_worker: 8
+
+# 4 张卡全部共用一个资源池
+resource_pool_spec:
+  actor_rollout_ref: [0, 1, 2, 3]

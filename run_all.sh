@@ -33,8 +33,9 @@ stage_data() {
 
 stage_sft() {
   divider "Stage 1 — SFT（LLaMA-Factory + FSDP2）"
-  lf "accelerate launch \
-      --config_file /workspace/configs/fsdp2_4gpu.yaml \
+  lf "torchrun \
+      --nproc_per_node=4 \
+      --master_port=0 \
       \$(which llamafactory-cli) train /workspace/configs/sft_lf.yaml"
   echo "  ✓ SFT adapter → /data4/mirror/model/saves/sft"
 }

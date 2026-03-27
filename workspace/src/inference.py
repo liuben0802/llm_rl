@@ -4,7 +4,7 @@ prompt 与训练完全一致，不存在分布偏移。
 """
 from __future__ import annotations
 from openai import OpenAI
-from src.prompt_utils import SYSTEM_PROMPT, build_user_prompt
+from workspace.src import SYSTEM_PROMPT, build_user_prompt
 
 INFER_BASE  = "http://localhost:8001/v1"
 INFER_MODEL = "rec-qwen3-14b"

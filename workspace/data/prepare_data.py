@@ -31,8 +31,8 @@ import pandas as pd
 from tqdm import tqdm
 
 sys.path.insert(0, "/workspace")
-from src.prompt_utils import SYSTEM_PROMPT, build_user_prompt
-from src.reward_fn import rule_reward
+from workspace.src import SYSTEM_PROMPT, build_user_prompt
+from workspace.src import rule_reward
 
 DATA_DIR = Path("/data")
 # 本地已保存的 teacher response 文件路径

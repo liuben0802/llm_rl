@@ -51,7 +51,9 @@ services:
       <<: *env
       RAY_ADDRESS: local
     working_dir: /workspace
-    command: tail -f /dev/null
+    command:
+      pip install --no-deps transformers==4.52.4 tokenizers==0.21.4 tensorboard -i https://mirrors.cloud.tencent.com/pypi/simple
+      tail -f /dev/null
     shm_size: "16gb"
     ulimits:
       memlock: -1

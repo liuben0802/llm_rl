@@ -1,5 +1,12 @@
 ### workspace/configs/rm_lf.yaml
 ### LLaMA-Factory Reward Model 训练配置
+###
+### 显存估算（Qwen3-14B + LoRA r=16，batch=1 chosen+rejected pair，A100 80GB）：
+###   冻结模型 28GB + LoRA优化器 1.8GB + 激活值(2序列)~15GB ≈ 45GB/卡
+###   DDP 单卡 45GB << 80GB，无需 FSDP
+###
+### 运行命令：
+###   FORCE_TORCHRUN=1 NPROC_PER_NODE=4 llamafactory-cli train /workspace/configs/rm_lf.yaml
 
 model_name_or_path: /saves/sft
 trust_remote_code: true

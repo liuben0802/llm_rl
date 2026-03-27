@@ -1,0 +1,150 @@
+# workspace/configs/verl_grpo.yaml
+# veRL 0.7 + SGLang 0.59  GRPO 配置
+# 镜像：verlai/verl:sgl059.latest
+# 硬件：4× A100 80GB，GPU 0-3
+#
+# ══════════════════════════════════════════════════════
+#  veRL 0.7 RM 架构变更说明
+#
+#  v0.6 及之前：reward_model.strategy=fsdp，RM 由 veRL 管理生命周期
+#  v0.7 起    ：废弃 FSDP/Megatron 原生 RM，改为 Server Mode
+#
+#  正确做法（本配置）：
+#    1. reward_model.enable: false
+#    2. RM 作为独立 SGLang 服务（--is-embedding）预先启动在 GPU 3
+#    3. compute_score 内部 HTTP 调用 /classify 端点打分
+#    4. actor+rollout 使用全部 4 卡
+#
+#  GPU 3 显存：RM Server(28GB) + Rollout(~40GB) = 68GB < 80GB ✓
+# ══════════════════════════════════════════════════════
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+# ════════════════
+# 数据
+# ════════════════
+data:
+  train_files: /data/grpo_train.parquet
+  val_files: ~
+  train_batch_size: 64          # 每步 rollout 的 prompt 数，生成 64×8=512 条候选
+  max_prompt_length: 4600       # system(1940)+user(2500)≈4440，留余量
+  max_response_length: 3000
+  filter_overlong_prompts: true
+  truncation: "error"
+
+# ════════════════
+# Actor / Rollout / Ref（全 4 卡）
+# ════════════════
+actor_rollout_ref:
+
+  model:
+    path: /saves/sft_merged
+    trust_remote_code: true
+
+  # ── Actor（FSDP2）──
+  actor:
+    strategy: fsdp2
+
+    optim:
+      optimizer: adamw
+      lr: 5.0e-6
+      weight_decay: 0.01
+
+    lr_warmup_steps_ratio: 0.05
+    lr_scheduler_type: cosine
+    min_lr_ratio: 0.1
+
+    ppo_mini_batch_size: 16
+    ppo_micro_batch_size_per_gpu: 2
+    ppo_epochs: 1
+    clip_ratio: 0.2
+    loss_agg_mode: "token-mean"
+
+    use_kl_loss: true
+    kl_loss_coef: 0.001
+    kl_loss_type: low_var_kl
+
+    fsdp_config:
+      param_offload: false
+      optimizer_offload: false
+      wrap_policy:
+        transformer_layer_cls_to_wrap: Qwen2DecoderLayer
+
+    use_remove_padding: true
+    use_dynamic_bsz: true
+
+  # ── Rollout（SGLang）──
+  rollout:
+    name: sglang
+
+    n: 8                              # G=8：每 prompt 生成 8 条候选
+    temperature: 0.8
+    top_p: 0.9
+    top_k: -1
+    response_length: 3000
+    do_sample: true
+
+    tensor_model_parallel_size: 4     # 全 4 卡 TP
+    gpu_memory_utilization: 0.50      # SGLang mem_fraction_static
+                                       # GPU 3 上 RM Server 占 28GB，
+                                       # 0.50×80=40GB，两者合计 68GB < 80GB ✓
+    dtype: bfloat16
+    free_cache_engine: true
+
+    log_prob_micro_batch_size_per_gpu: 4
+
+    engine_kwargs:
+      sglang:
+        attention_backend: flashinfer
+
+  # ── Ref（FSDP2，CPU offload）──
+  ref:
+    strategy: fsdp2
+    fsdp_config:
+      param_offload: true
+      wrap_policy:
+        transformer_layer_cls_to_wrap: Qwen2DecoderLayer
+
+# ════════════════
+# Reward Model
+# veRL 0.7 已废弃 FSDP/Megatron RM，改为 Server Mode
+# RM 通过 custom_reward_function 中的 HTTP 调用实现
+# ════════════════
+reward_model:
+  enable: false                       # ← 必须 false，v0.7 不再支持 fsdp 策略
+
+# ════════════════
+# 自定义 reward 函数
+# 规则 reward(70%) + HTTP 调用 SGLang RM Server(30%)
+# RM Server 启动命令见 run_grpo.sh
+# ════════════════
+custom_reward_function:
+  path: /workspace/src/reward_fn.py
+  name: compute_score
+
+# ════════════════
+# GRPO 算法
+# ════════════════
+algorithm:
+  gamma: 1.0
+  lam: 1.0
+  adv_estimator: grpo
+  use_kl_in_reward: false
+
+# ════════════════
+# Trainer
+# ════════════════
+trainer:
+  total_epochs: 2
+  n_gpus_per_node: 4
+
+  project_name: rec_grpo
+  experiment_name: qwen3_14b_rec
+  logger:
+    - tensorboard
+
+  save_freq: 50
+  test_freq: 100
+  default_local_dir: /saves/grpo
