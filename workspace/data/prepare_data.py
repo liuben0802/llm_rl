@@ -180,6 +180,9 @@ def make_grpo(samples: list[dict]):
     rows = []
     for s in samples:
         system, user = build_prompt(s)
+        candidates = []
+        for item in s.get("candidate_pool").split("-"):
+            candidates.extend(item.split(": ")[-1].split("、"))
         rows.append({
             "prompt": json.dumps([
                 {"role": "system", "content": system},
@@ -190,6 +193,7 @@ def make_grpo(samples: list[dict]):
                 "products_90d":      s["products_90d"],
                 "products_lastyear": s["products_lastyear"],
                 "products_3d":       s.get("products_3d", []),
+                "candidate_pool": candidates
             }),
         })
 

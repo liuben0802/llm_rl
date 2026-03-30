@@ -268,10 +268,11 @@ def compute_score(
     products_90d = ground_truth.get("products_90d", [])
     products_lastyear = ground_truth.get("products_lastyear", [])
     products_3d = ground_truth.get("products_3d", [])
+    candidate_pool = ground_truth.get("candidate_pool", [])
 
     # 规则 reward（主要信号）
     try:
-        r_rule = rule_reward(solution_str, products_90d, products_lastyear, products_3d)
+        r_rule = rule_reward(solution_str, products_90d, products_lastyear, products_3d, candidate_pool)
     except:
         print("rule reward 数据有问题\n")
         r_rule = 0.05
