@@ -64,10 +64,10 @@ def rule_reward(
     try:
         m = re.search(r'\{[\s\S]*\}', output)
         if not m:
-            return 0.0
+            return -3.0
         data: dict = json.loads(m.group())
     except (json.JSONDecodeError, ValueError):
-        return 0.02
+        return -2.0
 
     items = list(data.items())
     # 维度1：格式（20分）
