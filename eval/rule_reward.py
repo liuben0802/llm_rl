@@ -1,159 +1,166 @@
 import numpy as np
+import re
+import json
+# sku_brand_dict_path = "/app/data/sku_brand_dict.npy"
+# sku_brand_dict, _ = np.load(sku_brand_dict_path, allow_pickle=True)
 
-sku_brand_dict_path = "/app/data/sku_brand_dict.npy"
-sku_brand_dict, _ = np.load(sku_brand_dict_path, allow_pickle=True)
+sku_brand_dict = {}
 
-def rule_based_reward(
-    model_output: str,
-    products_90d: list,
-    products_lastyear: list,
-    products_3d: list,
-    candidate_pool: list,
+def parse_products_from_user_input(user_input: str) -> dict:
+    """从 user prompt 中解析商品列表（用于 reward 计算）"""
+    shop_name = user_input.split("【商店信息】\n店名：")[-1].split("【用户长期消费特征】")[0].strip()
+    categories = user_input.split("【用户长期消费特征】\n-")[-1].split("【稳定高频品牌（安全推荐池）")[0].strip()
+    brands = user_input.split("【稳定高频品牌（安全推荐池）】\n- ")[-1].split("【高优先级商品来源规则")[0].strip()
+
+    products_90d, products_lastyear, products_3d, candidate_pool = [], [], [], []
+
+    # 解析90天购买
+    m = re.search(r'用户最近90天购买商品：(.*?)(?:\n|3\.)', user_input, re.DOTALL)
+    if m:
+        products_90d = [p.strip() for p in m.group(1).split('、') if p.strip()]
+
+    # 解析去年同期
+    m = re.search(r'用户去年同期购买商品：(.*?)(?:\n→|\Z)', user_input, re.DOTALL)
+    if m:
+        products_lastyear = [p.strip() for p in m.group(1).split('、') if p.strip()]
+
+    # 解析3天购买
+    m = re.search(r'近3天购买商品：(.*?)(?:\n\n|\Z)', user_input, re.DOTALL)
+    if m:
+        raw = m.group(1).strip()
+        if raw and raw != '无':
+            products_3d = [p.strip() for p in raw.split('、') if p.strip()]
+
+    # 解析候选池
+    """
+    m = re.search(r'【候选商品.*?】\n(.*)', user_input, re.DOTALL)
+    if m:
+        pool_text = m.group(1)
+        # 从各品类提取商品名
+        items = re.findall(r'[^\n:：、,，]+(?:ml|g|kg|L|片|盒|包|瓶|袋|罐|听|桶)\S*', pool_text)
+        candidate_pool = [i.strip() for i in items if len(i.strip()) > 3]
+    """
+    candidate_pool = user_input.split("【候选商品（仅在推荐不足时使用）】")[-1].strip()
+    return {
+        "shop_name": shop_name,
+        "categories": categories,
+        "brands": brands,
+        "products_90d": products_90d,
+        "products_lastyear": products_lastyear,
+        "products_3d": products_3d,
+        "candidate_pool": candidate_pool,
+    }
+
+
+def rule_reward(
+    output: str,
+    products_90d: list[str],
+    products_lastyear: list[str],
+    products_3d: list[str],
+    products_pool: list[str]
 ) -> float:
-    """
-    纯规则 Reward 函数，返回 [0, 1] 的 float。
-    速度快，适合在 GRPO rollout 时批量计算。
-    """
-    import json, re
-
     score = 0.0
-    max_score = 100.0
-
-    # ── 1. 格式合规性 (20分) ──
-    fmt_score = 20.0
+    # 整体格式
     try:
-        # 尝试从输出中提取 JSON（兼容带 markdown 代码块的情况）
-        json_match = re.search(r'\{[\s\S]*\}', model_output)
-        if not json_match:
-            return 0.0  # 完全无 JSON，直接返回0
-        data = json.loads(json_match.group())
-    except json.JSONDecodeError:
-        return 0.05  # JSON 解析失败，最低分
+        m = re.search(r'\{[\s\S]*\}', output)
+        if not m:
+            return 0.0
+        data: dict = json.loads(m.group())
+    except (json.JSONDecodeError, ValueError):
+        return 0.02
 
-    # 检查 key 连续性
-    keys = list(data.keys())
-    expected_keys = [str(i) for i in range(1, len(keys) + 1)]
-    if keys != expected_keys:
-        fmt_score -= min(len(keys) * 2, 10)
-
-    names_seen = set()
-    for k, v in data.items():
+    items = list(data.items())
+    # 维度1：格式（20分）
+    fmt = 20.0
+    if [k for k, _ in items] != [str(i + 1) for i in range(len(items))]:
+        fmt -= 6.0
+    seen: set[str] = set()
+    for _, v in items:
         if not isinstance(v, dict):
-            fmt_score -= 2
+            fmt -= 2
             continue
-        # score 检查
-        s = v.get("score", None)
+        s = v.get("score")
+        if type(s) == str:
+            fmt -= 1
+            s = float(s)
         if s is None or not (0 <= s <= 1):
-            fmt_score -= 1
-        # reason 长度
-        reason = v.get("reason", "")
-        if len(reason) > 20:
-            fmt_score -= 1
-        # null 检查
+            fmt -= 1
+        if len(v.get("reason", "")) > 20:
+            fmt -= 1
         if None in v.values():
-            fmt_score -= 2
-        # 重复商品名
-        print(v)
-        name = v.get("name", "")
-        if name in names_seen:
-            fmt_score -= 3
-        names_seen.add(name)
+            fmt -= 2
+        n = v.get("name", "")
+        if type(n) != str:
+            n = ""
+        if n == "":
+            fmt -= 4  # 没有名称，重惩罚
+        if n in seen:
+            fmt -= 5
+        seen.add(n)
+    # score += max(0.0, fmt)
+    score += fmt
 
-    fmt_score = max(0, fmt_score)
-    score += fmt_score
+    # 维度2：来源（30分）
+    valid = set(products_90d) | set(products_lastyear) | set(products_pool)
+    halluc = 0
+    for _, v in items:
+        if isinstance(v, dict) and "name" in v and type(v["name"]) == str and (v["name"] not in valid):
+            halluc += 1
 
-    # ── 2. 商品来源合规性 (20分) ──
-    src_score = 20.0
-    all_valid_products = set(products_90d + products_lastyear + candidate_pool)
-    hallucination_count = 0
-    for k, v in data.items():
-        name = v.get("name", "")
-        if name and name not in all_valid_products:
-            hallucination_count += 1
-    src_score -= min(hallucination_count * 5, 20)
-    src_score = max(0, src_score)
-    score += src_score
+    # 一个不在来源的直接扣10分
+    # score += max(0.0, 30.0 - halluc * 10)
+    score += 30.0 - halluc * 10
 
-    # ── 3. 业务规则遵守 (30分) ──
-    biz_score = 30.0
-
-    # 3a. 高价值商品优先推荐 (10分)
-    high_value = set(products_90d) | set(products_lastyear)
-    rec_names = set(v.get("name", "") for v in data.values())
-    high_value_covered = len(high_value & rec_names)
-    high_value_ratio = min(high_value_covered / max(len(high_value), 1), 1.0)
-    biz_score_hv = high_value_ratio * 10
-    biz_score = biz_score - 10 + biz_score_hv  # 替换10分部分
-
-    # 3b. 降权规则 (10分)
-    products_3d_set = set(products_3d)
-    deduction_3d = 0
-    for k, v in data.items():
-        name = v.get("name", "")
-        s = v.get("score", 0)
-        if name in products_3d_set and s > 0.6:
-            # 3天内购买商品没被降权（分数应该 < 0.6）
-            deduction_3d += 2
-    biz_score -= min(deduction_3d, 10)
-
-    # 3c. 品牌多样性 (10分)
-    items_list = list(data.values())
-    brand_adjacent_violations = 0
-    def get_brand(name):
+    # 维度3：业务规则（30分）
+    biz = 30.0
+    high = set(products_90d) | set(products_lastyear)
+    rec = {v.get("name", "") for _, v in items if isinstance(v, dict) and type(v["name"]) is str}
+    cov = len(high & rec) / max(len(high), 1)
+    biz = biz - 10 + cov * 10
+    p3d = set(products_3d)
+    # 3 天降权，最多减10分
+    biz -= min(
+        sum(2 for _, v in items
+            if isinstance(v, dict)
+            and type(v.get("name")) is str and v.get("name") in p3d
+            and (float(v.get("score")) or 0) > 0.5),
+        10,
+    )
+    # 相邻品牌重复次数，10分
+    def _brand(name: str) -> str:
+        if type(name) != str:
+            name = name["name"]
         if name in sku_brand_dict:
             return sku_brand_dict[name]
-        return name[:3]  # fallback
+        return name[:3]
+    brands = [_brand(v.get("name","")) for _, v in items if isinstance(v, dict)]
+    biz -= min(
+        sum(1 for i in range(len(brands)-1) if brands[i] == brands[i+1]) * 2, 10
+    )
+    # score += max(0.0, biz)
+    score += biz
 
-    for i in range(len(items_list) - 1):
-        b1 = get_brand(items_list[i].get("name", ""))
-        b2 = get_brand(items_list[i+1].get("name", ""))
-        if b1 == b2:
-            brand_adjacent_violations += 1
-    biz_score -= min(brand_adjacent_violations * 2, 10)
-    biz_score = max(0, biz_score)
-    score += biz_score
+    # 维度4：质量（20分）
+    qual = 20.0
+    both = set(products_90d) & set(products_lastyear)
+    only90 = set(products_90d) - set(products_lastyear)
+    for _, v in items:
+        if not isinstance(v, dict): continue
+        nm, s = v.get("name",""), v.get("score") or 0
+        if type(nm) != str:
+            nm = ""
+        if nm in both and s < 0.85: qual -= 1.5
+        elif nm in only90 and not (0.80 <= float(s) <= 0.95): qual -= 1.0
+        if not v.get("reason") or len(v.get("reason","")) < 2: qual -= 1.0
+    n = len(items)
+    if n < 10: qual -= 5
+    elif n > 50: qual -= 3
+    # score += max(0.0, qual)
+    score += qual
+    # if score < 0:
+    #     score = 0.001
+    result = round(min(score / 100.0, 1.0), 4)
+    result = max(-3, result)
+    return result
 
-    # ── 4. 推荐质量 (20分) ──
-    qual_score = 20.0
-    both_lists = set(products_90d) & set(products_lastyear)
-    only_90d = set(products_90d) - set(products_lastyear)
-    only_ly = set(products_lastyear) - set(products_90d)
 
-    score_violations = 0
-    reason_violations = 0
-    for k, v in data.items():
-        name = v.get("name", "")
-        s = v.get("score", 0)
-        reason = v.get("reason", "")
-        # 分数合理性
-        if name in both_lists and s < 0.85:
-            score_violations += 1
-        elif name in only_90d and not (0.8 <= s <= 0.95):
-            score_violations += 1
-        elif name in only_ly and not (0.75 <= s <= 0.9):
-            score_violations += 1
-        # reason 质量
-        if not reason or len(reason) < 2:
-            reason_violations += 1
-
-    qual_score -= min(score_violations * 1.5, 10)
-    qual_score -= min(reason_violations * 1, 5)
-
-    # 数量合理性
-    n_items = len(data)
-    if n_items < 10:
-        qual_score -= 5
-    elif n_items > 50:
-        qual_score -= 3
-    qual_score = max(0, qual_score)
-    score += qual_score
-
-    # ── 5. 整体覆盖度 (10分) ──
-    cov_score = 10.0
-    if len(high_value) > 0:
-        coverage = min(high_value_covered / min(len(high_value), 30), 1.0)
-        cov_score = coverage * 10
-    score += cov_score
-
-    normalized = round(score / max_score, 4)
-    return float(normalized)

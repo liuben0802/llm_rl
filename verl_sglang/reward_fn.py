@@ -96,8 +96,10 @@ def rule_reward(
     products_90d: list[str],
     products_lastyear: list[str],
     products_3d: list[str],
+    products_pool: list[str]
 ) -> float:
     score = 0.0
+    # 整体格式
     try:
         m = re.search(r'\{[\s\S]*\}', output)
         if not m:
@@ -107,7 +109,6 @@ def rule_reward(
         return 0.02
 
     items = list(data.items())
-
     # 维度1：格式（20分）
     fmt = 20.0
     if [k for k, _ in items] != [str(i + 1) for i in range(len(items))]:
@@ -115,40 +116,49 @@ def rule_reward(
     seen: set[str] = set()
     for _, v in items:
         if not isinstance(v, dict):
-            fmt -= 2; continue
+            fmt -= 2
+            continue
         s = v.get("score")
-        if s is None or not (0 <= float(s) <= 1):
+        if type(s) == str:
+            fmt -= 1
+            s = float(s)
+        if s is None or not (0 <= s <= 1):
             fmt -= 1
         if len(v.get("reason", "")) > 20:
             fmt -= 1
         if None in v.values():
             fmt -= 2
         n = v.get("name", "")
+        if type(n) != str:
+            n = ""
+        if n == "":
+            fmt -= 4  # 没有名称，重惩罚
         if n in seen:
             fmt -= 3
         seen.add(n)
     score += max(0.0, fmt)
 
     # 维度2：来源（20分）
-    valid = set(products_90d) | set(products_lastyear)
+    valid = set(products_90d) | set(products_lastyear) | set(products_pool)
     halluc = sum(
         1 for _, v in items
-        if isinstance(v, dict) and v.get("name") and v["name"] not in valid
+        if isinstance(v, dict) and ("name" in v) and (type(v["name"]) == str) and (v["name"] not in valid)
     )
+    # halluc 最多50个，一个不在来源的直接扣5分
     score += max(0.0, 20.0 - halluc * 5)
 
     # 维度3：业务规则（30分）
     biz = 30.0
     high = set(products_90d) | set(products_lastyear)
-    rec  = {v.get("name", "") for _, v in items if isinstance(v, dict)}
-    cov  = len(high & rec) / max(len(high), 1)
-    biz  = biz - 10 + cov * 10
-    p3d  = set(products_3d)
+    rec = {v.get("name", "") for _, v in items if isinstance(v, dict)}
+    cov = len(high & rec) / max(len(high), 1)
+    biz = biz - 10 + cov * 10
+    p3d = set(products_3d)
     biz -= min(
         sum(2 for _, v in items
             if isinstance(v, dict)
             and v.get("name") in p3d
-            and (v.get("score") or 0) > 0.6),
+            and (float(v.get("score")) or 0) > 0.5),
         10,
     )
     def _brand(name: str) -> str:
@@ -162,19 +172,25 @@ def rule_reward(
     score += max(0.0, biz)
 
     # 维度4：质量（20分）
-    qual   = 20.0
-    both   = set(products_90d) & set(products_lastyear)
+    qual = 20.0
+    both = set(products_90d) & set(products_lastyear)
     only90 = set(products_90d) - set(products_lastyear)
     for _, v in items:
         if not isinstance(v, dict): continue
         nm, s = v.get("name",""), v.get("score") or 0
         if nm in both and s < 0.85: qual -= 1.5
-        elif nm in only90 and not (0.80 <= s <= 0.95): qual -= 1.0
+        elif nm in only90 and not (0.80 <= float(s) <= 0.95): qual -= 1.0
         if not v.get("reason") or len(v.get("reason","")) < 2: qual -= 1.0
     n = len(items)
     if n < 10: qual -= 5
     elif n > 50: qual -= 3
     score += max(0.0, qual)
+
+    # 重复：重复一个直接从总分里面扣5分
+    names = [v.get("name","") for _, v in items if isinstance(v, dict)]
+    distinct_names = set(names)
+    repect_rate = (len(names) - len(distinct_names)) / len(names)
+    score -= 5 * repect_rate
 
     # 维度5：覆盖度（10分）
     score += cov * 10
