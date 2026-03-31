@@ -107,13 +107,16 @@ def make_sft(samples: list[dict], min_reward: float = 0.65):
         for s in tqdm(samples, desc="SFT"):
             system, user = build_prompt(s)
             response = s["response"]
-
+            candidates = []
+            for item in s.get("candidate_pool").split("-"):
+                candidates.extend(item.split(": ")[-1].split("、"))
             # 过滤低质量 teacher 输出
             r = rule_reward(
                 response,
                 s["products_90d"],
                 s["products_lastyear"],
                 s.get("products_3d", []),
+                candidates
             )
             if r < min_reward:
                 continue
@@ -144,11 +147,13 @@ def make_rm(samples: list[dict], min_gap: float = 0.15):
     with open(path, "w", encoding="utf-8") as f:
         for s in tqdm(samples, desc="RM"):
             system, user = build_prompt(s)
-            chosen   = s["response"]
+            chosen = s["response"]
             rejected = corrupt(chosen)
-
-            r_c = rule_reward(chosen,   s["products_90d"], s["products_lastyear"], s.get("products_3d", []))
-            r_r = rule_reward(rejected, s["products_90d"], s["products_lastyear"], s.get("products_3d", []))
+            candidates = []
+            for item in s.get("candidate_pool").split("-"):
+                candidates.extend(item.split(": ")[-1].split("、"))
+            r_c = rule_reward(chosen,   s["products_90d"], s["products_lastyear"], s.get("products_3d", []), candidates)
+            r_r = rule_reward(rejected, s["products_90d"], s["products_lastyear"], s.get("products_3d", []), candidates)
 
             # gap 不够大则跳过（避免噪声对）
             if r_c - r_r < min_gap:
@@ -178,11 +183,14 @@ def make_grpo(samples: list[dict]):
     prompt 与线上推理完全相同：SYSTEM_PROMPT + 完整 user prompt。
     """
     rows = []
+    scores = []
     for s in samples:
         system, user = build_prompt(s)
         candidates = []
         for item in s.get("candidate_pool").split("-"):
             candidates.extend(item.split(": ")[-1].split("、"))
+        score = rule_reward(s["response"], s["products_90d"], s["products_lastyear"], s.get("products_3d", []), candidates)
+        scores.append(score)
         rows.append({
             "prompt": json.dumps([
                 {"role": "system", "content": system},
@@ -196,6 +204,12 @@ def make_grpo(samples: list[dict]):
                 "candidate_pool": candidates
             }),
         })
+    import numpy as np
+    scoreNP = np.array(scores)
+    import pandas as pd
+    scorePd = pd.DataFrame(scoreNP)
+    print(scorePd.describe())
+    print(f"大于0： {(scorePd > 0).sum()}")
 
     path = DATA_DIR / "grpo_train.parquet"
     pd.DataFrame(rows).to_parquet(path, index=False)
